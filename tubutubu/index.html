@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>Phaser しんかゲーム</title>
+<script src="https://cdn.jsdelivr.net/npm/phaser@3/dist/phaser.js"></script>
+<style>
+  body {
+    margin: 0;
+    background: #222;
+    text-align: center;
+    color: white;
+    font-family: sans-serif;
+  }
+  
+</style>
+</head>
+<body>
+
+<script>
+const WIDTH = 1000;//test
+const HEIGHT = 700;
+
+class TitleScene extends Phaser.Scene {
+  constructor() {
+    super("TitleScene");
+  }
+
+  create() {
+    this.add.text(WIDTH / 2, HEIGHT / 2 - 50, "しんかゲーム", {
+      fontSize: "48px",
+      fill: "#000000"
+    }).setOrigin(0.5);
+
+    this.add.text(WIDTH / 2, HEIGHT / 2 + 30, "クリックでスタート", {
+      fontSize: "28px",
+      fill: "#000000"
+    }).setOrigin(0.5);
+
+    this.input.once("pointerdown", () => {
+      this.scene.start("GameScene");
+      this.scene.start("UIScene");
+    });
+  }
+}
+
+class UIScene extends Phaser.Scene {
+  constructor() {
+    super("UIScene");
+  }
+
+  create() {
+    this.scoreText = this.add.text(20, 20, "Score: 0", {
+      fontSize: "28px",
+      fill: "#000000"
+    });
+
+    this.registry.events.on("changedata-score", (parent, value) => {
+      this.scoreText.setText("Score: " + value);
+    });
+  }
+}
+
+class GameScene extends Phaser.Scene {
+  constructor() {
+    super("GameScene");
+//sceneごとに件数をカプセルかするために、this.をつける
+    this.balls = [];
+    this.sizes = [];
+    this.mergeQueue = [];
+  }
+
+  create() {
+    this.balls = [];
+    this.mergeQueue = [];
+    this.registry.set("score", 0);
+
+    this.createSizes();
+    this.createWalls();
+
+    this.time.addEvent({
+      delay: 40,
+      loop: true,
+      callback: () => {
+        const level = Phaser.Math.Between(0, 2);
+        this.spawnBall(level);
+      }
+    });
+
+    this.matter.world.on("collisionstart", event => {
+      event.pairs.forEach(pair => {
+        const a = pair.bodyA.gameObject;
+        const b = pair.bodyB.gameObject;
+
+        if (!a || !b) return;
+        if (!a.isBall || !b.isBall) return;
+        if (a.isMerging || b.isMerging) return;
+        if (a.level !== b.level) return;
+
+        a.isMerging = true;
+        b.isMerging = true;
+
+        this.mergeQueue.push([a, b]);
+      });
+    });
+
+    this.input.keyboard.on("keydown-R", () => {
+      this.scene.restart();
+      this.registry.set("score", 0);
+    });
+
+    this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+
+    this.input.once("pointerdown", () => {
+      if (this.audioContext.state === "suspended") {
+        this.audioContext.resume();
+      }
+    });
+
+
+  }
+
+  update() {
+    for (let i = this.balls.length - 1; i >= 0; i--) {
+      const ball = this.balls[i];
+
+      if (!ball.active) {
+        this.balls.splice(i, 1);
+        continue;
+      }
+
+      if (ball.y > HEIGHT + 200 || ball.x < -200 || ball.x > WIDTH + 200) {
+        this.removeBall(ball);
+      }
+    }
+
+    this.processMergeQueue();
+  }
+
+  createSizes() {
+    this.sizes = [];
+
+    let base = 36;
+
+    for (let i = 0; i < 10; i++) {
+      const radius = Math.sqrt(base);
+      const color = Phaser.Display.Color.HSLToColor(i / 10, 0.8, 0.5).color;
+
+      this.sizes.push({ radius, color });
+
+      base *= 2;
+    }
+  }
+
+  createWalls() {
+    this.add.rectangle(100, HEIGHT / 2, 40, HEIGHT, 0x444444);
+    this.add.rectangle(900, HEIGHT / 2, 40, HEIGHT, 0x444444);
+    this.add.rectangle(500, HEIGHT - 20, 800, 40, 0x444444);
+
+    this.matter.add.rectangle(100, HEIGHT / 2, 40, HEIGHT, {
+      isStatic: true
+    });
+
+    this.matter.add.rectangle(900, HEIGHT / 2, 40, HEIGHT, {
+      isStatic: true
+    });
+
+    this.matter.add.rectangle(500, HEIGHT - 20, 800, 40, {
+      isStatic: true
+    });
+  }
+
+  spawnBall(level) {
+    const s = this.sizes[level];
+
+    const x = Phaser.Math.Between(250, 750);
+    const y = -50;
+
+    const ball = this.add.circle(x, y, s.radius, s.color);
+
+    this.matter.add.gameObject(ball, {
+      shape: {
+        type: "circle",
+        radius: s.radius
+      },
+      friction: 0.1,
+      frictionAir: 0.1,
+      restitution: 0.1,
+      density: 0.001
+    });
+
+    ball.isBall = true;
+    ball.level = level;
+    ball.radius = s.radius;
+    ball.isMerging = false;
+
+    this.balls.push(ball);
+  }
+
+  processMergeQueue() {
+    if (this.mergeQueue.length === 0) return;
+
+    const [a, b] = this.mergeQueue.shift();
+
+    if (!a.active || !b.active) return;
+    if (a.level !== b.level) return;
+
+    const newLevel = a.level + 1;
+    const x = (a.x + b.x) / 2;
+    const y = (a.y + b.y) / 2;
+
+    this.removeBall(a);
+    this.removeBall(b);
+
+    const currentScore = this.registry.get("score");
+    this.registry.set("score", currentScore + newLevel + 1);
+        // 融合音を鳴らす
+    this.playMergeSound(newLevel);
+        // 周囲のボールを爆発的に押し出す
+    this.applyExplosionForce(x, y, newLevel);
+
+    if (this.sizes[newLevel]) {
+      this.createMergedBall(x, y, newLevel);
+    }
+  }
+
+  createMergedBall(x, y, level) {
+    const s = this.sizes[level];
+
+    const ball = this.add.circle(x, y, s.radius, s.color);
+
+    this.matter.add.gameObject(ball, {
+      shape: {
+        type: "circle",
+        radius: s.radius
+      },
+      friction: 0.1,
+      frictionAir: 0.1,
+      restitution: 0.1,
+      density: 0.001
+    });
+
+    ball.isBall = true;
+    ball.level = level;
+    ball.radius = s.radius;
+    ball.isMerging = false;
+
+    ball.setVelocity(
+      Phaser.Math.FloatBetween(-1, 1),
+      1
+    );
+
+    this.balls.push(ball);
+  }
+
+  applyExplosionForce(x, y, level) {
+    const radius = 40 * (2 ** (level/2));   // 影響範囲
+    const power = -4;       // 爆発の強さ
+
+    this.balls.forEach(ball => {
+      if (!ball.active) return;
+      if (ball.isMerging) return;
+
+      const dx = ball.x - x;
+      const dy = ball.y - y;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+
+      if (distance === 0) return;
+      if (distance > radius) return;
+
+      // 近いほど強く、遠いほど弱くする
+      const forceRatio = 1 - distance / radius;
+
+      const nx = dx / distance;
+      const ny = dy / distance;
+
+      ball.setVelocity(
+        ball.body.velocity.x + nx * power * forceRatio,
+        ball.body.velocity.y + ny * power * forceRatio
+      );
+    });
+  }
+
+  playMergeSound(level) {
+    if (!this.audioContext) return;
+
+    if (this.audioContext.state === "suspended") {
+      this.audioContext.resume();
+    }
+
+    const oscillator = this.audioContext.createOscillator();
+    const gain = this.audioContext.createGain();
+
+    oscillator.type = "sine";
+    oscillator.frequency.value = 1100 * ((1/2) ** (level/6));
+    const volume = 0.1;
+    gain.gain.setValueAtTime(volume, this.audioContext.currentTime);
+    gain.gain.exponentialRampToValueAtTime(
+      0.001 * level,
+      this.audioContext.currentTime + 0.12
+    );
+
+    oscillator.connect(gain);
+    gain.connect(this.audioContext.destination);
+
+    oscillator.start();
+    oscillator.stop(this.audioContext.currentTime + 0.12);
+  }
+
+  removeBall(ball) {
+    ball.destroy();
+
+    const index = this.balls.indexOf(ball);
+    if (index >= 0) {
+      this.balls.splice(index, 1);
+    }
+  }
+}
+
+const config = {
+  type: Phaser.AUTO,
+  width: WIDTH,
+  height: HEIGHT,
+  backgroundColor: "#f4f4f4",
+  physics: {
+    default: "matter",
+    matter: {
+      gravity: { y: 1 },
+      debug: false
+    }
+  },
+  scene: [TitleScene, GameScene, UIScene]
+};
+
+new Phaser.Game(config);
+</script>
+
+</body>
+</html>
