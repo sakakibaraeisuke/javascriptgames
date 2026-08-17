@@ -1,0 +1,524 @@
+<!doctype html>
+<html>
+<head>
+    <meta charset="UTF-8" />
+    <title>Tetromino Tower - Matter</title>
+
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.js"></script>
+
+    <style>
+        body {
+            margin: 0;
+            background: #111;
+        }
+    </style>
+</head>
+
+<body>
+
+<script>
+
+// =========================================================
+// Phaser Configuration
+// =========================================================
+
+const config = {
+
+    type: Phaser.AUTO,
+
+    width: 800,
+    height: 600,
+
+    backgroundColor: '#222222',
+
+    physics: {
+        default: 'matter',
+        matter: {
+            gravity: {
+                x: 0,
+                y: 1
+            },
+        }
+    },
+
+    scene: {
+        preload: preload,
+        create: create,
+        update: update
+    }
+};
+
+const game = new Phaser.Game(config);
+
+// =========================================================
+// テトロミノ形状
+// =========================================================
+const TETROMINO_SHAPES = {
+
+    O: [
+        [-20, -20],
+        [ 20, -20],
+        [-20,  20],
+        [ 20,  20]
+    ],
+
+    T: [
+        [-40, -20],
+        [  0, -20],
+        [ 40, -20],
+        [  0,  20]
+    ],
+
+    S: [
+        [  0, -20],
+        [ 40, -20],
+        [-40,  20],
+        [  0,  20]
+    ],
+
+    Z: [
+        [-40, -20],
+        [  0, -20],
+        [  0,  20],
+        [ 40,  20]
+    ],
+
+    J: [
+        [-40, -20],
+        [-40,  20],
+        [  0,  20],
+        [ 40,  20]
+    ],
+
+    L: [
+        [ 40, -20],
+        [-40,  20],
+        [  0,  20],
+        [ 40,  20]
+    ],
+
+    I: [
+        [-60, 0],
+        [-20, 0],
+        [ 20, 0],
+        [ 60, 0]
+    ]
+};
+
+
+// =========================================================
+// 現在操作中のテトロミノ
+// =========================================================
+let currentTetromino = null;
+
+// =========================================================
+// preload
+// =========================================================
+function preload() {}
+
+// =========================================================
+// create
+// =========================================================
+
+function create() {
+
+    // =====================================================
+    // 地面
+    // =====================================================
+
+    const ground = this.add.rectangle(
+        400,
+        580,
+        400,
+        40,
+        0x666666
+    );
+
+    this.matter.add.gameObject(
+        ground,
+        {
+            isStatic: true
+        }
+    );
+
+    // =====================================================
+    // 最初のテトロミノを生成
+    // =====================================================
+    spawnControlledTetromino(this);
+
+
+    // =====================================================
+    // マウスクリック
+    // =====================================================
+
+    this.input.on(
+        'pointerdown',
+        () => {
+            // 操作中のミノがなければ何もしない
+            if (!currentTetromino) {
+                return;
+            }
+            // =================================================
+            // 現在のミノを手放す
+            // =================================================
+            releaseTetromino(currentTetromino);
+            //音を生成
+            playMergeSound(1)
+            // =================================================
+            // 次のミノを生成
+            // =================================================
+            spawnControlledTetromino(this);
+        }
+    );
+
+}
+
+function releaseTetromino(tetromino) {
+
+    if (!tetromino) {
+        return;
+    }
+
+    // =====================================================
+    // Matter.jsを取得
+    // =====================================================
+    const M = Phaser.Physics.Matter.Matter;
+    const body = tetromino.matterBody;
+
+    // =====================================================
+    // 操作終了
+    // =====================================================
+    tetromino.isControlled = false;
+    currentTetromino = null;
+
+
+    // =====================================================
+    // Static → Dynamic
+    // =====================================================
+    M.Body.setStatic(
+        body,
+        false
+    );
+}
+
+
+// =========================================================
+// 操作可能なテトロミノを生成
+// =========================================================
+
+function spawnControlledTetromino(scene) {
+
+    // =====================================================
+    // 1000ミリ秒後に生成
+    // =====================================================
+    scene.time.delayedCall(1000, () => {
+
+        // =====================================================
+        // 生成位置
+        // =====================================================
+        const x = scene.input.activePointer.x;
+        const y = 100; //マウスのy座標が大きくても、100以上にはならないようにし、上の方に留める。
+
+        // =====================================================
+        // ミノ生成
+        // =====================================================
+
+        const tetromino =
+            createTetromino(
+                scene,
+                x,
+                y
+            );
+
+
+        // =====================================================
+        // 操作中フラグ
+        // =====================================================
+        tetromino.isControlled = true;
+
+        // =====================================================
+        // 物理を一時停止
+        // =====================================================
+        const M = Phaser.Physics.Matter.Matter;
+        M.Body.setStatic(
+            tetromino.matterBody,
+            true
+        );
+
+        // =====================================================
+        // 現在操作中のミノとして保存
+        // =====================================================
+        currentTetromino = tetromino;
+    });
+}
+
+//----------------------------------
+//音を生成
+//--------------------------------
+let audioContext = null;
+
+function playMergeSound(level) {
+
+    if (!audioContext) {
+        audioContext = new AudioContext();
+    }
+
+    if (audioContext.state === "suspended") {
+        audioContext.resume();
+    }
+
+    const oscillator = audioContext.createOscillator();
+    const gain = audioContext.createGain();
+
+    oscillator.type = "sine";
+    oscillator.frequency.value =
+        1100 * ((1 / 2) ** (level / 6));
+
+    gain.gain.setValueAtTime(
+        0.1,
+        audioContext.currentTime
+    );
+
+    gain.gain.exponentialRampToValueAtTime(
+        0.001,
+        audioContext.currentTime + 0.12
+    );
+
+    oscillator.connect(gain);
+    gain.connect(audioContext.destination);
+
+    oscillator.start();
+    oscillator.stop(audioContext.currentTime + 0.12);
+}
+
+
+
+
+// =========================================================
+// テトロミノ生成
+// =========================================================
+
+function createTetromino(scene,x,y) {
+
+    const M =Phaser.Physics.Matter.Matter;
+    const Bodies = M.Bodies;
+    const Body = M.Body;
+
+    // =====================================================
+    // ランダムなテトロミノを選択
+    // =====================================================
+    const types =
+        Object.keys(
+            TETROMINO_SHAPES
+        );
+    const type =
+        Phaser.Utils.Array.GetRandom(
+            types
+        );
+    const shape =
+        TETROMINO_SHAPES[type];
+
+    // =====================================================
+    // 色
+    // =====================================================
+    const color =
+        Phaser.Display.Color.RandomRGB().color;
+
+    // =====================================================
+    // Phaser側のコンテナ
+    // =====================================================
+
+    const tetromino =
+        scene.add.container(
+            0,
+            0
+        );
+
+
+    const blocks = [];
+
+
+    // =====================================================
+    // Phaser側のブロック
+    // =====================================================
+
+    shape.forEach(
+        ([dx, dy]) => {
+
+            const block =
+                scene.add.rectangle(
+                    dx,
+                    dy,
+                    40,
+                    40,
+                    color
+                );
+
+
+            blocks.push(
+                block
+            );
+
+
+            tetromino.add(
+                block
+            );
+
+        }
+    );
+
+    // =====================================================
+    // Matter Bodyのパーツ
+    // =====================================================
+    const parts = [];
+    shape.forEach(
+        ([dx, dy]) => {
+            const part =
+                Bodies.rectangle(
+                    x + dx,
+                    y + dy,
+                    40,
+                    40
+                );
+            parts.push(part);
+        }
+    );
+
+    // =====================================================
+    // Compound Body
+    // =====================================================
+   const compoundBody =
+    Body.create({
+        parts: parts,
+        restitution: 0.1,
+        friction: 0.5,
+        frictionAir: 0.01,
+        isStatic: false,
+        ignoreGravity: false
+    });
+
+    // =====================================================
+    // 生成時にランダムな角度を決定
+    // =====================================================
+    const randomAngle =
+        Phaser.Math.FloatBetween(
+            -Math.PI,
+            Math.PI
+        );
+
+    M.Body.setAngle(
+        compoundBody,
+        randomAngle
+    );
+
+    // =====================================================
+    // Matter Worldへ追加
+    // =====================================================
+    scene.matter.world.add(
+        compoundBody
+    );
+
+    // =====================================================
+    // Phaser側に保存
+    // =====================================================
+    tetromino.matterBody = compoundBody;
+    tetromino.blocks = blocks;
+    tetromino.type = type;
+
+    // =====================================================
+    // Matter Bodyの重心と
+    // Phaser Containerの原点のズレ
+    // =====================================================
+    const offsetX = x - compoundBody.position.x;
+    const offsetY = y - compoundBody.position.y;
+
+
+    // =====================================================
+    // Phaser側のブロック位置を補正
+    // =====================================================
+
+    shape.forEach(
+        ([dx, dy], index) => {
+            const block = blocks[index];
+            block.x = dx + offsetX;
+            block.y = dy + offsetY;
+        }
+    );
+    // =====================================================
+    // 初期位置を同期
+    // =====================================================
+    syncTetromino(
+        tetromino
+    );
+    return tetromino;
+}
+
+
+// =========================================================
+// PhaserとMatterの同期
+// =========================================================
+function syncTetromino(tetromino) {
+    const body =
+        tetromino.matterBody;
+    tetromino.x =
+        body.position.x;
+    tetromino.y =
+        body.position.y;
+    tetromino.rotation =
+        body.angle;
+}
+
+
+// =========================================================
+// update
+// =========================================================
+
+function update() {
+
+    // =====================================================
+    // 現在操作中のミノのアップデート
+    // =====================================================
+
+    if (currentTetromino) {
+        const pointer = this.input.activePointer;
+        const body = currentTetromino.matterBody;
+
+        // =================================================
+        // マウス位置へ移動
+        // =================================================
+        const targetX = pointer.x;
+        const targetY = pointer.y;
+
+        // =================================================
+        // Matter Bodyをマウス位置へ移動
+        // =================================================
+        Phaser.Physics.Matter.Matter.Body.setPosition(
+            body,
+            {
+                x: targetX,
+                y: 100
+            }
+        );
+    }
+
+    // =====================================================
+    // すべてのテトロミノを同期
+    // =====================================================
+
+    this.children.list.forEach(
+        (gameObject) => {
+            if (!gameObject.matterBody) {
+                return;
+            }
+            syncTetromino(
+                gameObject
+            );
+        }
+    );
+
+}
+
+</script>
+
+</body>
+</html>
